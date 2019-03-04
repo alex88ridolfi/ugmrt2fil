@@ -1,0 +1,278 @@
+#!/usr/bin/env python
+
+#################### ALESSANDRO RIDOLFI ########################
+#                        Version 1.0                           #
+#                    Bonn, February 2019                       #
+################################################################
+
+
+import sys, os, os.path, glob, shutil, time
+import numpy as np
+
+from sigpyproc import Header, Filterbank
+
+
+class uGMRT_Observation(object):
+        def __init__(self, file_name):
+                self.file_abspath = os.path.abspath(file_name)
+                self.file_nameonly = self.file_abspath.split("/")[-1]
+                self.file_basename, self.file_extension = os.path.splitext(self.file_nameonly)
+                
+                self.dict_properties = self.read_GMRT_header(self.file_abspath)
+                
+                self.telescope                = self.dict_properties['Site']
+                self.backend                  = "GWB"
+                self.observer                 = self.dict_properties['Observer']
+                self.project                  = self.dict_properties['Proposal']
+                self.array_mode               = self.dict_properties['Array Mode']  #GMRT-only
+                self.observing_mode           = self.dict_properties['Observing Mode'] #GMRT-only
+                self.date_obs                 = self.dict_properties['Date']
+                self.num_antennas             = int(self.dict_properties['Num Antennas'])
+                self.antenna_list             = self.dict_properties['Antenna List']
+                self.nchan                    = int(self.dict_properties['Num Channels'])
+                self.chanbw_MHz               = np.float64(self.dict_properties['Channel width'])
+                self.chanbw_MHz_fabs          = np.fabs(self.chanbw_MHz)
+                self.freq_low_MHz             = np.float64(self.dict_properties['Frequency Ch.1'])
+                self.freq_central_MHz         = self.freq_low_MHz + (0.5*self.nchan)*self.chanbw_MHz_fabs
+                self.freq_high_MHz            = self.freq_low_MHz + (1.0*self.nchan)*self.chanbw_MHz_fabs
+                self.freq_fch1_MHz            = self.freq_high_MHz - (0.5*self.chanbw_MHz_fabs)
+                self.bw_MHz                   = self.chanbw_MHz*self.nchan
+                self.receiver                 = "%s-%sMHz" % ( str(int(self.freq_low_MHz)), str(int(self.freq_high_MHz)))
+                self.t_samp_s                 = np.float64(self.dict_properties['Sampling Time'])*1.0e-6
+                self.nbits                    = int(self.dict_properties['Num bits/sample'])
+                self.data_format              = self.dict_properties['Data Format']
+                self.polarization             = self.dict_properties['Polarizations']
+                self.MJD_start                = np.float64(self.dict_properties['MJD'])
+                self.MJD_int                  = int(self.dict_properties['MJD'].split(".")[0])
+                self.UTC                      = self.dict_properties['UTC']
+                self.source_name              = self.dict_properties['Source']
+                self.ra_str                   = self.dict_properties['Coordinates'].split(",")[0].strip()
+                self.dec_str                  = self.dict_properties['Coordinates'].split(",")[1].strip()
+                self.coordinate_sys           = self.dict_properties['Coordinate Sys']
+                self.drift_rate               = self.dict_properties['Drift Rate']
+                self.numbytes                 = os.path.getsize(self.file_abspath.replace(".gmrt_hdr",".gmrt_dat"))
+                self.N_samples                = int(   self.numbytes / ( (self.nchan)*(self.nbits/8.) )  )
+                self.T_obs_s                  = self.N_samples*self.t_samp_s
+                self.bad_channels             = self.dict_properties['Bad Channels']
+                self.bit_shift_value          = int(self.dict_properties['Bit shift value'])
+
+
+                self.header_filterbank        = self.translate_uGMRT_header_to_filterbank_header()
+                
+
+        def read_GMRT_header(self, gmrtdat_filename):
+                gmrthdr_filename = gmrtdat_filename.replace(".gmrt_dat", ".gmrt_hdr")
+                gmrthdr_file = open(gmrthdr_filename, "r")
+                dict_properties = {}
+                for line in gmrthdr_file:
+                        if line != "\n" and (not line.startswith("#")):
+                                key, value = line.split(" : ")
+                                dict_properties[key.strip()] = value.strip()
+                gmrthdr_file.close()
+
+                return dict_properties
+
+        
+        def translate_uGMRT_header_to_filterbank_header(self):
+
+                filterbank_header = Header.Header(  { "telescope_id":     7,
+                                           "machine_id":       9,
+                                           "data_type":        1,
+                                           "source_name":      self.source_name,
+                                           "src_raj":          np.float64(self.ra_str.replace(":", ""))   ,      
+                                           "src_dej":          np.float64(self.dec_str.replace(":", ""))   ,      
+                                           "tstart":           self.MJD_start  , 
+                                           "tsamp":            self.t_samp_s,
+                                           "nsamples":         self.N_samples,
+                                           "nifs":             1          ,
+                                           "fch1":             self.freq_fch1_MHz       ,
+                                           "foff":             -np.fabs(self.chanbw_MHz),
+                                           "fchannel":         self.freq_central_MHz,
+                                           "nchans":           self.nchan            ,
+                                           "obs_date":         self.date_obs           }
+                )
+
+                
+                
+
+                return filterbank_header
+
+
+
+
+        
+#DEFAULT PARAMETERS
+string_version = "1.0 (03Mar2019)"
+bitshift_value = 8
+flag_clipchan0 = 1
+flag_flipband = 0
+verbosity_level = 1
+N_spectra_per_block = 100000
+filterbank_nbit = 8 
+outfilename = ""
+string_bitshift = ""
+#SHELL ARGUMENT
+if (len(sys.argv) == 1 or ("-h" in sys.argv) or ("-help" in sys.argv) or ("--help" in sys.argv)):
+        print
+        print "USAGE: %s -ugmrtfile <gmrt_datfile> [-nbit {8,16,32}] [-bitshift N] [-N_spectra_per_block N] [-flipband] [-dontclipchan0] [-o outfilename] [-q]" % (os.path.basename(sys.argv[0]))
+        print
+        print "%20s  %-30s:  %-50s" % ("-ugmrtfile", "<observation.gmrt_dat>", "Original 16-bit uGMRT observation file")
+        print "%20s  %-30s:  %-50s" % ("-nbits", "{8,16,32} (default: 8)", "Number of bit per sample of the output file ")
+        print "%20s  %-30s:  %-50s" % ("-N_spectra_per_block", "[int] (default: 100000)", "Number of spectra per block to write")
+        print "%20s  %-30s:  %-50s" % ("-bitshift", "[int] (default: 8)", "Bitshift value to apply")
+        print "%20s  %-30s:  %-50s" % ("-flipband", "", "Reverse the order of channels")
+        print "%20s  %-30s:  %-50s" % ("-dontclipchan0", "", "Do not set the powers in the first channel to 0")
+        print "%20s  %-30s:  %-50s" % ("-outfilename", "(default: 'basename.fil')", "Output filename")
+        print "%20s  %-30s:  %-50s" % ("-q", "", "Quiet mode: do not print any information")
+        print
+        exit()
+elif (("-version" in sys.argv) or ("--version" in sys.argv)):
+        print "Version: %s" % (string_version)
+        exit()
+else:
+        for n in range(1, len(sys.argv)):
+                if (sys.argv[n] == "-ugmrtfile"):
+                        uGMRT_dat_filename = sys.argv[n+1]
+
+                elif (sys.argv[n] == "-nbit"):
+                        filterbank_nbit = int(sys.argv[n+1])
+                        if filterbank_nbit not in [8,16,32]:
+                                print "ERROR: output number of bits per sample must be either 8, 16 or 32"
+                                exit()
+                elif (sys.argv[n] == "-bitshift"):
+                        bitshift_value = int(sys.argv[n+1])
+                        if np.fabs(bitshift_value)>16:
+                                print "ERROR: bitshift value must be smaller than 16!"
+                                exit()
+
+                elif (sys.argv[n] == "-N_spectra_per_block"):
+                        N_spectra_per_block = int(sys.argv[n+1])
+                elif (sys.argv[n] == "-flipband"):
+                        flag_flipband = 1
+                elif (sys.argv[n] == "-dontclipchan0"):
+                        flag_clipchan0 = 0
+                elif (sys.argv[n] == "-o"):
+                        outfilename = sys.argv[n+1]
+                elif (sys.argv[n] == "-q"):
+                        verbosity_level = 0 
+
+gmrt_observation = uGMRT_Observation(uGMRT_dat_filename)
+
+if verbosity_level >= 1:
+        print "###################      %15s      ###################" % (os.path.basename(sys.argv[0]))
+        print "###################      %15s      ###################" % (string_version)
+        print
+        print "%30s: '%s'" % ("uGMRT file to convert", uGMRT_dat_filename)
+        print
+        print
+        print "======================================================================"
+        print "Observation Properties:"
+        print 
+        print "%30s: %s" % ("Source name", gmrt_observation.source_name)
+        print "%30s: %s" % ("RA", gmrt_observation.ra_str)
+        print "%30s: %s" % ("DEC", gmrt_observation.dec_str)
+        print "%30s: %s" % ("Observing mode", gmrt_observation.observing_mode)
+        print "%30s: %s" % ("Array mode", gmrt_observation.array_mode)
+        print "%30s: %s" % ("Num of channels", gmrt_observation.nchan)
+        print "%30s: %s" % ("Channel width (MHz)", gmrt_observation.chanbw_MHz)
+        print "%30s: %s" % ("Central freq. of first channel (MHz)", gmrt_observation.freq_fch1_MHz)
+        print "%30s: %s" % ("Lowest freq. of observing band (MHz)", gmrt_observation.freq_low_MHz)
+        print "%30s: %s" % ("Highest freq. of observing band (MHz)", gmrt_observation.freq_high_MHz)
+        print "%30s: %s" % ("Central freq. of observing band (MHz)", gmrt_observation.freq_central_MHz)
+        print "%30s: %s" % ("Total observing bandwidth (MHz)", gmrt_observation.bw_MHz)
+        print "%30s: %s" % ("Sampling time (s)", gmrt_observation.t_samp_s)
+        print "%30s: %s" % ("Bits per sample", gmrt_observation.nbits)
+        print "%30s: %s" % ("MJD of first time sample", gmrt_observation.MJD_start)
+        print "%30s: %s" % ("Number of samples", gmrt_observation.N_samples)
+        print "%30s: %s" % ("Observation length", gmrt_observation.T_obs_s)
+
+
+
+if outfilename == "":
+        uGMRT_observation_filterbank_filename = uGMRT_dat_filename.replace(".gmrt_dat", ".fil")
+else:
+        uGMRT_observation_filterbank_filename = outfilename
+
+
+uGMRT_observation_filterbank = gmrt_observation.header_filterbank.prepOutfile( uGMRT_observation_filterbank_filename, nbits=filterbank_nbit)
+uGMRT_observation_filterbank.cwrite(np.array([]))
+uGMRT_observation_filterbank.flush()
+
+
+
+fil_header_size = os.path.getsize(uGMRT_observation_filterbank_filename)
+
+N_bytes_tot = os.path.getsize(uGMRT_dat_filename)
+
+
+
+
+block_bytes = N_spectra_per_block*gmrt_observation.nchan
+N_samples_block = block_bytes/2
+N_blocks = N_bytes_tot / block_bytes
+last_bytes = N_bytes_tot % block_bytes
+if filterbank_nbit == 8:
+        string_bitshift = "with bitshift %d" % (bitshift_value)
+
+if verbosity_level >= 1:
+        print
+        print
+        print "%30s = %d" % ("Block size (bytes)", block_bytes )
+        print "%30s = %d" % ("Original data size (bytes)", N_bytes_tot )
+        print "%30s = %d" % ("Number of blocks to write", N_blocks )
+        print "%30s = %d" % ("Last bit of the observation to write (bytes)", last_bytes )
+        print
+        print "Writing output file '%s' with %d bits per sample%s..." % (uGMRT_observation_filterbank_filename, filterbank_nbit, string_bitshift)
+        print
+
+time_start = time.time()
+uGMRT_observation_filterbank_file = open(uGMRT_observation_filterbank_filename, 'ab')
+with open(uGMRT_dat_filename, "r") as f:
+        for n in range(N_blocks):
+                f.seek(n * block_bytes)
+                current_outfilesize = os.path.getsize(uGMRT_observation_filterbank_filename)
+                current_runtime = time.time() - time_start
+                if current_runtime > 0 and n > 0:
+                        write_speed_MBs = (current_outfilesize/1024./1024.) / current_runtime
+                        blocks_per_second = n / current_runtime
+                        ETA_s = (N_blocks - n)/blocks_per_second
+                        ETA_min = ETA_s/60.
+                else:
+                        write_speed_MBs = 0
+                        ETA_min = np.nan
+                
+
+                        
+                if verbosity_level >= 1:
+                        print "block #%d / %3d (%s)  ---> outfile size = %d bytes  (write speed = %.2f MB/s  | ETA: %.2f min)" % (n, N_blocks, f.tell(), current_outfilesize, write_speed_MBs, ETA_min)
+
+                block = np.fromfile(f, dtype="uint16", count=N_samples_block)
+                block = block.reshape(N_samples_block/gmrt_observation.nchan, gmrt_observation.nchan)
+                
+                if flag_clipchan0 == 1:
+                        block[:,0] = 0 
+
+                if flag_flipband == 1:
+                        original_block = block[0]
+                        block = np.fliplr(block)
+                        reversed_block = block[0]
+                        print "Flipping the band...."
+                        print "   %s" % (original_block)
+                        print "-->%s" % (reversed_block)
+                
+                block = block.reshape(N_samples_block)
+                if filterbank_nbit == 8:
+                        uGMRT_observation_filterbank_file.write(np.uint8(block >> bitshift_value))
+                elif filterbank_nbit == 16:
+                        uGMRT_observation_filterbank_file.write(np.uint16(block))
+                elif filterbank_nbit == 32:
+                        uGMRT_observation_filterbank_file.write(np.uint32(block))
+                uGMRT_observation_filterbank_file.flush()
+
+
+        #Final bytes
+        f.seek(N_blocks*block_bytes)
+        block = np.fromfile(f, dtype="uint16", count=last_bytes)
+        uGMRT_observation_filterbank_file.write(np.uint8(block >> bitshift_value))
+        uGMRT_observation_filterbank_file.flush()
+        uGMRT_observation_filterbank_file.close()
