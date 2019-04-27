@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 #################### ALESSANDRO RIDOLFI ########################
-#                        Version 1.0                           #
+#                       Version 1.0.1                          #
 #                    Bonn, February 2019                       #
 ################################################################
 
@@ -102,8 +102,9 @@ class uGMRT_Observation(object):
 
         
 #DEFAULT PARAMETERS
-string_version = "1.0 (03Mar2019)"
-bitshift_value = 8
+string_version = "1.0.1 (27Mar2019)"
+bitshift_value = -1
+string_bs = ""
 flag_clipchan0 = 1
 flag_flipband = 0
 verbosity_level = 1
@@ -117,9 +118,9 @@ if (len(sys.argv) == 1 or ("-h" in sys.argv) or ("-help" in sys.argv) or ("--hel
         print "USAGE: %s -ugmrtfile <gmrt_datfile> [-nbit {8,16,32}] [-bitshift N] [-N_spectra_per_block N] [-flipband] [-dontclipchan0] [-o outfilename] [-q]" % (os.path.basename(sys.argv[0]))
         print
         print "%20s  %-30s:  %-50s" % ("-ugmrtfile", "<observation.gmrt_dat>", "Original 16-bit uGMRT observation file")
-        print "%20s  %-30s:  %-50s" % ("-nbits", "{8,16,32} (default: 8)", "Number of bit per sample of the output file ")
+        print "%20s  %-30s:  %-50s" % ("-nbit", "{8,16,32} (default: 8)", "Number of bit per sample of the output file ")
         print "%20s  %-30s:  %-50s" % ("-N_spectra_per_block", "[int] (default: 100000)", "Number of spectra per block to write")
-        print "%20s  %-30s:  %-50s" % ("-bitshift", "[int] (default: 8)", "Bitshift value to apply")
+        print "%20s  %-30s:  %-50s" % ("-bitshift", "[int]", "Bitshift value to apply when converting to 8-bit data")
         print "%20s  %-30s:  %-50s" % ("-flipband", "", "Reverse the order of channels")
         print "%20s  %-30s:  %-50s" % ("-dontclipchan0", "", "Do not set the powers in the first channel to 0")
         print "%20s  %-30s:  %-50s" % ("-outfilename", "(default: 'basename.fil')", "Output filename")
@@ -137,11 +138,13 @@ else:
                 elif (sys.argv[n] == "-nbit"):
                         filterbank_nbit = int(sys.argv[n+1])
                         if filterbank_nbit not in [8,16,32]:
+                                print
                                 print "ERROR: output number of bits per sample must be either 8, 16 or 32"
                                 exit()
                 elif (sys.argv[n] == "-bitshift"):
                         bitshift_value = int(sys.argv[n+1])
                         if np.fabs(bitshift_value)>16:
+                                print
                                 print "ERROR: bitshift value must be smaller than 16!"
                                 exit()
 
@@ -186,10 +189,24 @@ if verbosity_level >= 1:
         print "%30s: %s" % ("Number of samples", gmrt_observation.N_samples)
         print "%30s: %s" % ("Observation length", gmrt_observation.T_obs_s)
 
+if filterbank_nbit==8:
+        if bitshift_value == -1:
+                print
+                print "ERROR: When converting to 8-bit data, you must specify the bitshift to apply!"
+                print "       Use the '-bitshift N' option, where  0 < N <= 16 (reasonable values will be between 3 and 7)."
+                exit()
+        else:
+                string_bs = "_bs%d" % (bitshift_value)
+else:
+        if bitshift_value != -1:
+                print 
+                print "WARNING: bitshit is not needed when converting to 16-bit or 32-bit data. Ignoring the '-bitshift %d' option..." % (bitshift_value)
+                print
+
 
 
 if outfilename == "":
-        uGMRT_observation_filterbank_filename = uGMRT_dat_filename.replace(".gmrt_dat", ".fil")
+        uGMRT_observation_filterbank_filename = uGMRT_dat_filename.replace(".gmrt_dat", "_%dbit%s.fil" % (filterbank_nbit, string_bs))
 else:
         uGMRT_observation_filterbank_filename = outfilename
 
@@ -222,7 +239,7 @@ if verbosity_level >= 1:
         print "%30s = %d" % ("Number of blocks to write", N_blocks )
         print "%30s = %d" % ("Last bit of the observation to write (bytes)", last_bytes )
         print
-        print "Writing output file '%s' with %d bits per sample%s..." % (uGMRT_observation_filterbank_filename, filterbank_nbit, string_bitshift)
+        print "Writing output file '%s' with %d bits per sample %s..." % (uGMRT_observation_filterbank_filename, filterbank_nbit, string_bitshift)
         print
 
 time_start = time.time()
@@ -244,7 +261,7 @@ with open(uGMRT_dat_filename, "r") as f:
 
                         
                 if verbosity_level >= 1:
-                        print "block #%d / %3d (%s)  ---> outfile size = %d bytes  (write speed = %.2f MB/s  | ETA: %.2f min)" % (n, N_blocks, f.tell(), current_outfilesize, write_speed_MBs, ETA_min)
+                        print "block #%d / %3d (%s)  ---> outfile size = %d bytes  (write speed = %.2f MB/s  | ETA: %.2f min)" % (n+1, N_blocks, f.tell(), current_outfilesize, write_speed_MBs, ETA_min)
 
                 block = np.fromfile(f, dtype="uint16", count=N_samples_block)
                 block = block.reshape(N_samples_block/gmrt_observation.nchan, gmrt_observation.nchan)
@@ -273,6 +290,12 @@ with open(uGMRT_dat_filename, "r") as f:
         #Final bytes
         f.seek(N_blocks*block_bytes)
         block = np.fromfile(f, dtype="uint16", count=last_bytes)
-        uGMRT_observation_filterbank_file.write(np.uint8(block >> bitshift_value))
+        if filterbank_nbit == 8:
+                uGMRT_observation_filterbank_file.write(np.uint8(block >> bitshift_value))
+        elif filterbank_nbit == 16:
+                uGMRT_observation_filterbank_file.write(np.uint16(block))
+        elif filterbank_nbit == 32:
+                uGMRT_observation_filterbank_file.write(np.uint32(block))
+
         uGMRT_observation_filterbank_file.flush()
         uGMRT_observation_filterbank_file.close()
