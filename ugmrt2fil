@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 #################### ALESSANDRO RIDOLFI ########################
-#                       Version 1.0.1                          #
+#                       Version 1.0.2                          #
 #                    Bonn, February 2019                       #
 ################################################################
 
@@ -102,7 +102,7 @@ class uGMRT_Observation(object):
 
         
 #DEFAULT PARAMETERS
-string_version = "1.0.1 (27Mar2019)"
+string_version = "1.0.2 (30Apr2019)"
 bitshift_value = -1
 string_bs = ""
 flag_clipchan0 = 1
@@ -115,19 +115,20 @@ string_bitshift = ""
 #SHELL ARGUMENT
 if (len(sys.argv) == 1 or ("-h" in sys.argv) or ("-help" in sys.argv) or ("--help" in sys.argv)):
         print
-        print "USAGE: %s -ugmrtfile <gmrt_datfile> [-nbit {8,16,32}] [-bitshift N] [-N_spectra_per_block N] [-flipband] [-dontclipchan0] [-o outfilename] [-q]" % (os.path.basename(sys.argv[0]))
+        print "USAGE: %s -ugmrtfile <gmrt_datfile> [-nbit {8,16,32}] [-bitshift N] [-N_spectra_per_block N] [-flipband] [-dontclipchan0] [-o outfilename] [-Q]" % (os.path.basename(sys.argv[0]))
         print
         print "%20s  %-30s:  %-50s" % ("-ugmrtfile", "<observation.gmrt_dat>", "Original 16-bit uGMRT observation file")
         print "%20s  %-30s:  %-50s" % ("-nbit", "{8,16,32} (default: 8)", "Number of bit per sample of the output file ")
-        print "%20s  %-30s:  %-50s" % ("-N_spectra_per_block", "[int] (default: 100000)", "Number of spectra per block to write")
         print "%20s  %-30s:  %-50s" % ("-bitshift", "[int]", "Bitshift value to apply when converting to 8-bit data")
+        print "%20s  %-30s:  %-50s" % ("-N_spectra_per_block", "[int] (default: 100000)", "Number of spectra per block to write")
         print "%20s  %-30s:  %-50s" % ("-flipband", "", "Reverse the order of channels")
         print "%20s  %-30s:  %-50s" % ("-dontclipchan0", "", "Do not set the powers in the first channel to 0")
-        print "%20s  %-30s:  %-50s" % ("-outfilename", "(default: 'basename.fil')", "Output filename")
-        print "%20s  %-30s:  %-50s" % ("-q", "", "Quiet mode: do not print any information")
+        print "%20s  %-30s:  %-50s" % ("-o", "(default: 'basename.fil')", "Output filename")
+        print "%20s  %-30s:  %-50s" % ("-Q", "", "Quiet mode: do not print any information")
+        print "%20s  %-30s:  %-50s" % ("-version", "", "Print code version")
         print
         exit()
-elif (("-version" in sys.argv) or ("--version" in sys.argv)):
+elif (("-v" in sys.argv) or ("-version" in sys.argv) or ("--version" in sys.argv)):
         print "Version: %s" % (string_version)
         exit()
 else:
@@ -143,7 +144,7 @@ else:
                                 exit()
                 elif (sys.argv[n] == "-bitshift"):
                         bitshift_value = int(sys.argv[n+1])
-                        if np.fabs(bitshift_value)>16:
+                        if np.fabs(bitshift_value)>=16:
                                 print
                                 print "ERROR: bitshift value must be smaller than 16!"
                                 exit()
@@ -156,17 +157,20 @@ else:
                         flag_clipchan0 = 0
                 elif (sys.argv[n] == "-o"):
                         outfilename = sys.argv[n+1]
-                elif (sys.argv[n] == "-q"):
+                elif (sys.argv[n] == "-Q"):
                         verbosity_level = 0 
 
 gmrt_observation = uGMRT_Observation(uGMRT_dat_filename)
 
 if verbosity_level >= 1:
-        print "###################      %15s      ###################" % (os.path.basename(sys.argv[0]))
-        print "###################      %15s      ###################" % (string_version)
+        print
+        print "#"*62
+        print "#" + " "*26 + "%s" % ("%s") % (os.path.basename(sys.argv[0])) + " "*25 + "#"
+        print "#" + " "*22 + "%s" % (string_version) + " "*21 + "#"
+        print "#"*62
+        print
         print
         print "%30s: '%s'" % ("uGMRT file to convert", uGMRT_dat_filename)
-        print
         print
         print "======================================================================"
         print "Observation Properties:"
@@ -299,3 +303,8 @@ with open(uGMRT_dat_filename, "r") as f:
 
         uGMRT_observation_filterbank_file.flush()
         uGMRT_observation_filterbank_file.close()
+
+if verbosity_level > 0:
+        print
+        print "Filterbank file '%s' successfully written on disk!" % (uGMRT_observation_filterbank_filename)
+        print
